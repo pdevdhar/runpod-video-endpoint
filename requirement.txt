@@ -1,8 +1,0 @@
-runpod
-torch
-torchvision
-opencv-python
-numpy
-pillow
-transformers
-accelerate
