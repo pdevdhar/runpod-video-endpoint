@@ -6,17 +6,16 @@ import imageio
 import uuid
 
 # -----------------------------
-# Lazy-loaded SVD pipeline
+# Lazy pipelines
 # -----------------------------
 
 svd_pipe = None
+wan_pipe = None
+
 
 def load_svd():
-
     global svd_pipe
-
     if svd_pipe is None:
-
         import torch
         from diffusers import StableVideoDiffusionPipeline
 
@@ -24,54 +23,94 @@ def load_svd():
             "stabilityai/stable-video-diffusion-img2vid",
             torch_dtype=torch.float16,
             variant="fp16"
-        )
-
-        svd_pipe.to("cuda")
+        ).to("cuda")
 
     return svd_pipe
 
 
+def load_wan():
+    """
+    Placeholder loader for WAN-style model.
+    Replace with actual model once available in your setup.
+    """
+    global wan_pipe
+    if wan_pipe is None:
+        # Example structure only (model name depends on your deployment)
+        from diffusers import DiffusionPipeline
+
+        wan_pipe = DiffusionPipeline.from_pretrained(
+            "WAN_MODEL_PATH_OR_REPO"
+        ).to("cuda")
+
+    return wan_pipe
+
+
 # -----------------------------
-# Decode incoming image
+# Image decode + padding
 # -----------------------------
 
 def decode_image(image_base64):
-
     if "," in image_base64:
         image_base64 = image_base64.split(",")[1]
 
-    image_bytes = base64.b64decode(image_base64)
+    return Image.open(
+        BytesIO(base64.b64decode(image_base64))
+    ).convert("RGB")
 
-    image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
-    return image
+def prepare_image(image):
+    image = image.copy()
+
+    target = (1024, 576)
+    image.thumbnail(target)
+
+    canvas = Image.new("RGB", target, (0, 0, 0))
+    x = (target[0] - image.width) // 2
+    y = (target[1] - image.height) // 2
+
+    canvas.paste(image, (x, y))
+    return canvas
 
 
 # -----------------------------
-# Preserve aspect ratio
-# inside widescreen frame
+# FAST MODE (SVD)
 # -----------------------------
 
-def prepare_image_for_svd(image):
+def run_svd(image, duration):
 
-    target_width = 1024
-    target_height = 576
+    pipe = load_svd()
 
-    # preserve aspect ratio
-    image.thumbnail((target_width, target_height))
+    num_frames = 14
+    fps = 7
 
-    background = Image.new(
-        "RGB",
-        (target_width, target_height),
-        (0, 0, 0)
+    result = pipe(
+        image,
+        num_frames=num_frames,
+        num_inference_steps=30,
+        motion_bucket_id=70
     )
 
-    x = (target_width - image.width) // 2
-    y = (target_height - image.height) // 2
+    return result.frames[0], fps
 
-    background.paste(image, (x, y))
 
-    return background
+# -----------------------------
+# CINEMATIC MODE (WAN)
+# -----------------------------
+
+def run_wan(image, duration):
+
+    pipe = load_wan()
+
+    # WAN-style models typically support longer sequences better
+    fps = 6
+    num_frames = min(int(duration * fps), 90)  # allow longer clips safely
+
+    result = pipe(
+        image,
+        num_frames=num_frames
+    )
+
+    return result.frames[0], fps
 
 
 # -----------------------------
@@ -80,83 +119,43 @@ def prepare_image_for_svd(image):
 
 def handler(job):
 
-    input_data = job.get("input", {})
+    inp = job.get("input", {})
 
-    prompt = input_data.get("prompt", "")
+    prompt = inp.get("prompt", "")
+    image_base64 = inp.get("image_base64")
+    duration = float(inp.get("duration", 2.0))
+    mode = inp.get("mode", "fast")
 
-    image_base64 = input_data.get("image_base64")
+    if not image_base64:
+        return {"status": "error", "message": "no image"}
 
-    use_svd = input_data.get("use_svd", False)
+    image = prepare_image(decode_image(image_base64))
 
-    # decimal duration support
-    duration = float(input_data.get("duration", 2.0))
+    # -------------------------
+    # ROUTER
+    # -------------------------
 
-    # keep quality stable
-    num_frames = 14
+    if mode == "cinematic":
+        frames, fps = run_wan(image, duration)
+    else:
+        frames, fps = run_svd(image, duration)
 
-    # derive fps from desired duration
-    fps = max(2, min(10, round(num_frames / duration)))
+    # -------------------------
+    # Encode video
+    # -------------------------
 
-    if image_base64 is None:
-        return {
-            "status": "error",
-            "message": "No image received"
-        }
+    vid = str(uuid.uuid4())
+    path = f"/tmp/{vid}.mp4"
 
-    # decode image
-    image = decode_image(image_base64)
+    imageio.mimsave(path, frames, fps=fps)
 
-    # preserve aspect ratio
-    image = prepare_image_for_svd(image)
-
-    # fallback mode
-    if not use_svd:
-        return {
-            "status": "legacy_mode",
-            "prompt": prompt,
-            "image_size": image.size
-        }
-
-    # load pipeline lazily
-    pipe = load_svd()
-
-    # generate frames
-    result = pipe(
-        image,
-        num_frames=num_frames,
-        num_inference_steps=30,
-        decode_chunk_size=8,
-        motion_bucket_id=60
-    )
-
-    frames = result.frames[0]
-
-    # -----------------------------
-    # Save MP4
-    # -----------------------------
-
-    video_id = str(uuid.uuid4())
-
-    video_path = f"/tmp/{video_id}.mp4"
-
-    imageio.mimsave(
-        video_path,
-        frames,
-        fps=fps
-    )
-
-    # read mp4 bytes
-    with open(video_path, "rb") as f:
-        video_bytes = f.read()
-
-    # encode base64 video
-    video_base64 = base64.b64encode(video_bytes).decode("utf-8")
+    with open(path, "rb") as f:
+        video_base64 = base64.b64encode(f.read()).decode("utf-8")
 
     return {
         "status": "success",
-        "mode": "svd",
+        "mode": mode,
         "prompt": prompt,
-        "image_size": image.size,
         "duration": duration,
         "fps": fps,
         "num_frames": len(frames),
@@ -164,10 +163,4 @@ def handler(job):
     }
 
 
-# -----------------------------
-# Runpod entrypoint
-# -----------------------------
-
-runpod.serverless.start({
-    "handler": handler
-})
+runpod.serverless.start({"handler": handler})
