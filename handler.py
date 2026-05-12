@@ -1,2 +1,8 @@
+import runpod
+
 def handler(job):
-    return {"status": "boot_ok"}
+    return {"ok": True}
+
+runpod.serverless.start({
+    "handler": handler
+})
