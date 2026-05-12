@@ -4,7 +4,6 @@ from io import BytesIO
 from PIL import Image
 import imageio
 import uuid
-import os
 
 # -----------------------------
 # Lazy-loaded SVD pipeline
@@ -16,6 +15,7 @@ def load_svd():
     global svd_pipe
 
     if svd_pipe is None:
+
         import torch
         from diffusers import StableVideoDiffusionPipeline
 
@@ -36,7 +36,6 @@ def load_svd():
 
 def decode_image(image_base64):
 
-    # remove data:image/... prefix
     if "," in image_base64:
         image_base64 = image_base64.split(",")[1]
 
@@ -45,6 +44,35 @@ def decode_image(image_base64):
     image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
     return image
+
+
+# -----------------------------
+# Pad image to widescreen
+# while preserving aspect ratio
+# -----------------------------
+
+def prepare_image_for_svd(image):
+
+    target_width = 1024
+    target_height = 576
+
+    # preserve aspect ratio
+    image.thumbnail((target_width, target_height))
+
+    # create black background
+    background = Image.new(
+        "RGB",
+        (target_width, target_height),
+        (0, 0, 0)
+    )
+
+    # center image
+    x = (target_width - image.width) // 2
+    y = (target_height - image.height) // 2
+
+    background.paste(image, (x, y))
+
+    return background
 
 
 # -----------------------------
@@ -59,6 +87,18 @@ def handler(job):
     image_base64 = input_data.get("image_base64")
     use_svd = input_data.get("use_svd", False)
 
+    # configurable duration
+    duration = int(input_data.get("duration", 2))
+
+    # fps strategy
+    fps = 7 if duration <= 2 else 5
+
+    # frame calculation
+    num_frames = duration * fps
+
+    # keep SVD stable
+    num_frames = min(num_frames, 25)
+
     if image_base64 is None:
         return {
             "status": "error",
@@ -68,7 +108,10 @@ def handler(job):
     # decode image
     image = decode_image(image_base64)
 
-    # legacy test path
+    # preserve aspect ratio
+    image = prepare_image_for_svd(image)
+
+    # legacy mode
     if not use_svd:
         return {
             "status": "legacy_mode",
@@ -76,14 +119,14 @@ def handler(job):
             "image_size": image.size
         }
 
-    # -----------------------------
-    # Load SVD lazily
-    # -----------------------------
-
+    # load SVD lazily
     pipe = load_svd()
 
     # generate frames
-    result = pipe(image)
+    result = pipe(
+        image,
+        num_frames=num_frames
+    )
 
     frames = result.frames[0]
 
@@ -98,14 +141,14 @@ def handler(job):
     imageio.mimsave(
         video_path,
         frames,
-        fps=7
+        fps=fps
     )
 
     # read mp4 bytes
     with open(video_path, "rb") as f:
         video_bytes = f.read()
 
-    # base64 encode video
+    # encode video base64
     video_base64 = base64.b64encode(video_bytes).decode("utf-8")
 
     return {
@@ -114,8 +157,11 @@ def handler(job):
         "prompt": prompt,
         "image_size": image.size,
         "num_frames": len(frames),
+        "duration": duration,
+        "fps": fps,
         "video_base64": video_base64
     }
+
 
 # -----------------------------
 # Runpod entrypoint
