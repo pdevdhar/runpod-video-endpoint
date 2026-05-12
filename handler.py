@@ -1,15 +1,11 @@
 import runpod
 
-# This is the function that will process your input
 def handler(job):
-    # 'job' is a dictionary containing the input data
-    job_input = job['input']
-    
-    # Do your logic here
-    result = f"Hello, {job_input.get('name', 'World')}!"
-    
-    return result
+    image = job["input"].get("image_base64")
 
-# Use this instead of uvicorn.run()
+    return {
+        "received": image is not None,
+        "size": len(image) if image else 0
+    }
+
 runpod.serverless.start({"handler": handler})
-
