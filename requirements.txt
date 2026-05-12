@@ -10,6 +10,8 @@ transformers==4.38.2
 accelerate==0.27.2
 safetensors==0.4.2
 
+huggingface_hub==0.20.3
+
 pillow
 
 imageio
