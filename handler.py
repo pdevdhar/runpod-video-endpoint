@@ -12,6 +12,7 @@ import uuid
 svd_pipe = None
 
 def load_svd():
+
     global svd_pipe
 
     if svd_pipe is None:
@@ -31,7 +32,7 @@ def load_svd():
 
 
 # -----------------------------
-# Decode incoming base64 image
+# Decode incoming image
 # -----------------------------
 
 def decode_image(image_base64):
@@ -47,8 +48,8 @@ def decode_image(image_base64):
 
 
 # -----------------------------
-# Pad image to widescreen
-# while preserving aspect ratio
+# Preserve aspect ratio
+# inside widescreen frame
 # -----------------------------
 
 def prepare_image_for_svd(image):
@@ -59,14 +60,12 @@ def prepare_image_for_svd(image):
     # preserve aspect ratio
     image.thumbnail((target_width, target_height))
 
-    # create black background
     background = Image.new(
         "RGB",
         (target_width, target_height),
         (0, 0, 0)
     )
 
-    # center image
     x = (target_width - image.width) // 2
     y = (target_height - image.height) // 2
 
@@ -84,20 +83,19 @@ def handler(job):
     input_data = job.get("input", {})
 
     prompt = input_data.get("prompt", "")
+
     image_base64 = input_data.get("image_base64")
+
     use_svd = input_data.get("use_svd", False)
 
-    # configurable duration
-    duration = int(input_data.get("duration", 2))
+    # decimal duration support
+    duration = float(input_data.get("duration", 2.0))
 
-    # fps strategy
-    fps = 7 if duration <= 2 else 5
+    # keep quality stable
+    num_frames = 14
 
-    # frame calculation
-    num_frames = duration * fps
-
-    # keep SVD stable
-    num_frames = min(num_frames, 25)
+    # derive fps from desired duration
+    fps = max(2, min(10, round(num_frames / duration)))
 
     if image_base64 is None:
         return {
@@ -111,7 +109,7 @@ def handler(job):
     # preserve aspect ratio
     image = prepare_image_for_svd(image)
 
-    # legacy mode
+    # fallback mode
     if not use_svd:
         return {
             "status": "legacy_mode",
@@ -119,13 +117,16 @@ def handler(job):
             "image_size": image.size
         }
 
-    # load SVD lazily
+    # load pipeline lazily
     pipe = load_svd()
 
     # generate frames
     result = pipe(
         image,
-        num_frames=num_frames
+        num_frames=num_frames,
+        num_inference_steps=30,
+        decode_chunk_size=8,
+        motion_bucket_id=60
     )
 
     frames = result.frames[0]
@@ -148,7 +149,7 @@ def handler(job):
     with open(video_path, "rb") as f:
         video_bytes = f.read()
 
-    # encode video base64
+    # encode base64 video
     video_base64 = base64.b64encode(video_bytes).decode("utf-8")
 
     return {
@@ -156,9 +157,9 @@ def handler(job):
         "mode": "svd",
         "prompt": prompt,
         "image_size": image.size,
-        "num_frames": len(frames),
         "duration": duration,
         "fps": fps,
+        "num_frames": len(frames),
         "video_base64": video_base64
     }
 
