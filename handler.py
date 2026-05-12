@@ -1,28 +1,15 @@
-from fastapi import FastAPI
-from pydantic import BaseModel
-import uvicorn
+import runpod
 
-app = FastAPI()
+# This is the function that will process your input
+def handler(job):
+    # 'job' is a dictionary containing the input data
+    job_input = job['input']
+    
+    # Do your logic here
+    result = f"Hello, {job_input.get('name', 'World')}!"
+    
+    return result
 
+# Use this instead of uvicorn.run()
+runpod.serverless.start({"handler": handler})
 
-class GenerateRequest(BaseModel):
-    prompt: str = ""
-    image_base64: str = ""
-
-
-@app.get("/")
-def root():
-    return {"status": "running"}
-
-
-@app.post("/generate")
-def generate(req: GenerateRequest):
-    return {
-        "status": "success",
-        "message": "endpoint working",
-        "prompt": req.prompt
-    }
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
