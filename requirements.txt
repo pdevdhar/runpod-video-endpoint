@@ -1,4 +1,10 @@
-fastapi
-uvicorn
-pydantic
 runpod
+torch
+torchvision
+diffusers
+transformers
+accelerate
+safetensors
+pillow
+imageio
+imageio-ffmpeg
