@@ -33,16 +33,25 @@ def generate_dummy_video(image):
 
     frames = []
 
-    # create 10 identical frames
-    for _ in range(10):
-        frames.append(image)
+    width, height = image.size
+
+    for i in range(20):
+
+        # move image slightly each frame
+        shifted = Image.new("RGB", (width, height))
+
+        offset = i * 5
+
+        shifted.paste(image, (offset, 0))
+
+        frames.append(shifted)
 
     output_path = "/tmp/output.mp4"
 
     imageio.mimsave(
         output_path,
         frames,
-        fps=5
+        fps=10
     )
 
     with open(output_path, "rb") as f:
@@ -51,7 +60,6 @@ def generate_dummy_video(image):
     video_base64 = base64.b64encode(video_bytes).decode("utf-8")
 
     return video_base64
-
 
 # -----------------------------------
 # RUNPOD HANDLER
