@@ -8,3 +8,5 @@ safetensors
 pillow
 imageio
 imageio-ffmpeg
+opencv-python
+sentencepiece

@@ -2,20 +2,34 @@ import runpod
 import base64
 from PIL import Image
 import io
+import torch
 import imageio
 
-# -----------------------------------
-# MODEL PLACEHOLDER (LOAD ONCE)
-# -----------------------------------
-MODEL = "dummy_model_loaded"
+from diffusers import StableVideoDiffusionPipeline
 
 
-# -----------------------------------
-# DECODE BASE64 IMAGE
-# -----------------------------------
+# -------------------------------------------------
+# LOAD MODEL ONCE
+# -------------------------------------------------
+
+print("Loading Stable Video Diffusion model...")
+
+pipe = StableVideoDiffusionPipeline.from_pretrained(
+    "stabilityai/stable-video-diffusion-img2vid",
+    torch_dtype=torch.float16
+)
+
+pipe.to("cuda")
+
+print("Model loaded.")
+
+
+# -------------------------------------------------
+# DECODE IMAGE
+# -------------------------------------------------
+
 def decode_image(image_base64):
 
-    # remove data:image/jpeg;base64,
     if "," in image_base64:
         image_base64 = image_base64.split(",")[1]
 
@@ -26,32 +40,25 @@ def decode_image(image_base64):
     return image
 
 
-# -----------------------------------
-# CREATE DUMMY VIDEO
-# -----------------------------------
-def generate_dummy_video(image):
+# -------------------------------------------------
+# GENERATE VIDEO
+# -------------------------------------------------
 
-    frames = []
+def generate_video(image):
 
-    width, height = image.size
+    image = image.resize((1024, 576))
 
-    for i in range(20):
-
-        # move image slightly each frame
-        shifted = Image.new("RGB", (width, height))
-
-        offset = i * 5
-
-        shifted.paste(image, (offset, 0))
-
-        frames.append(shifted)
+    frames = pipe(
+        image,
+        decode_chunk_size=8
+    ).frames[0]
 
     output_path = "/tmp/output.mp4"
 
     imageio.mimsave(
         output_path,
         frames,
-        fps=10
+        fps=7
     )
 
     with open(output_path, "rb") as f:
@@ -61,9 +68,11 @@ def generate_dummy_video(image):
 
     return video_base64
 
-# -----------------------------------
+
+# -------------------------------------------------
 # RUNPOD HANDLER
-# -----------------------------------
+# -------------------------------------------------
+
 def handler(job):
 
     job_input = job["input"]
@@ -74,7 +83,7 @@ def handler(job):
 
     image = decode_image(image_base64)
 
-    video_base64 = generate_dummy_video(image)
+    video_base64 = generate_video(image)
 
     return {
         "received": True,
@@ -84,9 +93,10 @@ def handler(job):
     }
 
 
-# -----------------------------------
+# -------------------------------------------------
 # START WORKER
-# -----------------------------------
+# -------------------------------------------------
+
 runpod.serverless.start({
     "handler": handler
 })
