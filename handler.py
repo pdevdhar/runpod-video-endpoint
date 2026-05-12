@@ -4,6 +4,11 @@ from PIL import Image
 import io
 import torch
 import imageio
+import os
+
+os.environ["HF_HOME"] = "/workspace/hf_cache"
+os.environ["TRANSFORMERS_CACHE"] = "/workspace/hf_cache"
+os.environ["TORCH_HOME"] = "/workspace/torch_cache"
 
 from diffusers import StableVideoDiffusionPipeline
 
