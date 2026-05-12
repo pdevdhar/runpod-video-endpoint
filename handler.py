@@ -1,38 +1,89 @@
 import runpod
 
-import os
-os.environ["HF_HOME"] = "/workspace/hf_cache"
-os.environ["TRANSFORMERS_CACHE"] = "/workspace/hf_cache"
-os.environ["TORCH_HOME"] = "/workspace/torch_cache"
+# ----------------------------
+# Lazy-loaded SVD pipeline
+# ----------------------------
 
-pipe = None  # IMPORTANT: no loading at startup
+svd_pipe = None
 
+def load_svd():
+    """
+    Lazily load Stable Video Diffusion only when needed.
+    This prevents rollout/startup delays.
+    """
+    global svd_pipe
 
-def load_model():
-    global pipe
-    if pipe is None:
-        from diffusers import StableVideoDiffusionPipeline
+    if svd_pipe is None:
         import torch
+        from diffusers import StableVideoDiffusionPipeline
 
-        pipe = StableVideoDiffusionPipeline.from_pretrained(
+        svd_pipe = StableVideoDiffusionPipeline.from_pretrained(
             "stabilityai/stable-video-diffusion-img2vid",
             torch_dtype=torch.float16,
             variant="fp16"
         )
-        pipe.to("cuda")
+
+        svd_pipe.to("cuda")
+
+    return svd_pipe
 
 
-def handler(job):
-    load_model()
+# ----------------------------
+# YOUR EXISTING WORKING LOGIC
+# ----------------------------
 
-    input_data = job["input"]
-    image = input_data["image"]  # we'll wire this next step
-
-    # placeholder for now
+def legacy_video_pipeline(input_data):
+    """
+    Replace this with your CURRENT working code
+    (the sideways frames version that already worked).
+    """
     return {
-        "status": "model_loaded",
-        "message": "SVD initialized safely"
+        "status": "legacy_pipeline_used",
+        "message": "This is your working pre-SVD pipeline"
     }
 
 
-runpod.serverless.start({"handler": handler})
+# ----------------------------
+# MAIN HANDLER
+# ----------------------------
+
+def handler(job):
+    input_data = job.get("input", {})
+
+    use_svd = input_data.get("use_svd", False)
+
+    # ------------------------
+    # PATH 1: LEGACY (SAFE)
+    # ------------------------
+    if not use_svd:
+        return legacy_video_pipeline(input_data)
+
+    # ------------------------
+    # PATH 2: SVD (LAZY LOAD)
+    # ------------------------
+    pipe = load_svd()
+
+    image = input_data.get("image")
+
+    if image is None:
+        return {
+            "error": "No image provided for SVD"
+        }
+
+    # NOTE: actual SVD call (you may refine this later)
+    result = pipe(image)
+
+    return {
+        "status": "success",
+        "mode": "svd",
+        "output": str(result)
+    }
+
+
+# ----------------------------
+# RUNPOD ENTRYPOINT
+# ----------------------------
+
+runpod.serverless.start({
+    "handler": handler
+})
