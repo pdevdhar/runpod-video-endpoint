@@ -101,15 +101,21 @@ def handler(job):
         fps=7
     )
 
+    # read mp4 bytes
+    with open(video_path, "rb") as f:
+        video_bytes = f.read()
+
+    # base64 encode video
+    video_base64 = base64.b64encode(video_bytes).decode("utf-8")
+
     return {
         "status": "success",
         "mode": "svd",
         "prompt": prompt,
         "image_size": image.size,
         "num_frames": len(frames),
-        "video_path": video_path
+        "video_base64": video_base64
     }
-
 
 # -----------------------------
 # Runpod entrypoint
