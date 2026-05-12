@@ -6,16 +6,11 @@ import imageio
 import uuid
 
 # -----------------------------
-# Pipelines
+# Model
 # -----------------------------
 
 svd_pipe = None
-anim_pipe = None
 
-
-# -----------------------------
-# FAST MODE (SVD)
-# -----------------------------
 
 def load_svd():
     global svd_pipe
@@ -31,25 +26,6 @@ def load_svd():
         ).to("cuda")
 
     return svd_pipe
-
-
-# -----------------------------
-# CINEMATIC MODE (AnimateDiff)
-# -----------------------------
-
-def load_animdiff():
-    global anim_pipe
-
-    if anim_pipe is None:
-        import torch
-        from diffusers import AnimateDiffPipeline
-
-        # motion module approach (standard AnimateDiff setup)
-        anim_pipe = AnimateDiffPipeline.from_pretrained(
-            "guoyww/animatediff-motion-adapter-v1-5-2"
-        ).to("cuda")
-
-    return anim_pipe
 
 
 # -----------------------------
@@ -81,49 +57,60 @@ def pad_image(img):
 
 
 # -----------------------------
-# FAST MODE (SVD)
+# Motion presets (NEW)
 # -----------------------------
 
-def run_fast(image, duration):
+def get_motion_config(motion, quality):
+
+    base = {
+        "static": 60,
+        "zoom_in": 85,
+        "zoom_out": 80,
+        "pan_left": 75,
+        "pan_right": 75,
+        "handheld": 110
+    }
+
+    mb = base.get(motion, 75)
+
+    # quality adjusts stability
+    # higher quality = more stable, less chaotic motion
+    if quality == "high":
+        mb -= 10
+    elif quality == "low":
+        mb += 15
+
+    return max(40, min(120, mb))
+
+
+# -----------------------------
+# FAST / CINEMATIC SHARED CORE
+# -----------------------------
+
+def generate_svd(image, duration, motion, quality):
 
     pipe = load_svd()
 
-    num_frames = 14
+    motion_bucket_id = get_motion_config(motion, quality)
+
+    # -------------------------
+    # frame strategy (NEW)
+    # -------------------------
+
+    # smooth scaling instead of fixed 14 frames
+    num_frames = min(max(int(12 + duration * 2.5), 14), 24)
+
+    # fps derived from duration
     fps = max(4, min(8, round(num_frames / duration)))
 
     result = pipe(
         image,
         num_frames=num_frames,
-        num_inference_steps=30,
-        motion_bucket_id=75
+        num_inference_steps=30 if quality == "high" else 25,
+        motion_bucket_id=motion_bucket_id
     )
 
-    return result.frames[0], fps
-
-
-# -----------------------------
-# CINEMATIC MODE (AnimateDiff)
-# -----------------------------
-
-def run_cinematic(image, duration):
-
-    try:
-        pipe = load_animdiff()
-
-        fps = 6
-        num_frames = min(int(duration * fps), 48)
-
-        result = pipe(
-            prompt="cinematic smooth camera motion, high quality, filmic lighting",
-            num_frames=num_frames,
-            guidance_scale=7.5
-        )
-
-        return result.frames[0], fps
-
-    except Exception as e:
-        print("AnimateDiff failed, falling back to SVD:", e)
-        return run_fast(image, duration)
+    return result.frames[0], fps, num_frames
 
 
 # -----------------------------
@@ -138,19 +125,24 @@ def handler(job):
     mode = inp.get("mode", "fast")
     duration = float(inp.get("duration", 3.0))
 
+    motion = inp.get("motion", "static")
+    quality = inp.get("quality", "medium")
+
     if not image_b64:
         return {"status": "error", "message": "missing image"}
 
     image = pad_image(decode_image(image_b64))
 
     # -------------------------
-    # ROUTER
+    # SINGLE ENGINE (stable)
     # -------------------------
 
-    if mode == "cinematic":
-        frames, fps = run_cinematic(image, duration)
-    else:
-        frames, fps = run_fast(image, duration)
+    frames, fps, num_frames = generate_svd(
+        image,
+        duration,
+        motion,
+        quality
+    )
 
     # -------------------------
     # Encode video
@@ -167,11 +159,13 @@ def handler(job):
     return {
         "status": "success",
         "mode": mode,
+        "motion": motion,
+        "quality": quality,
         "duration": duration,
         "fps": fps,
-        "frames": len(frames),
-        "video_base64": video_b64,
-        "backend_used": "animdiff" if mode == "cinematic" else "svd"
+        "frames": num_frames,
+        "motion_bucket_id_used": get_motion_config(motion, quality),
+        "video_base64": video_b64
     }
 
 
