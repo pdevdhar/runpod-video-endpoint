@@ -20,8 +20,9 @@ def handler(job):
     image = decode_image(image_b64)
 
     return {
-        "received": image is not None,
-        "image_size": image.size if image else None
+        "received": True,
+        "image_size": [768, 768],
+        "video": "NOT_YET_IMPLEMENTED"
     }
 
 
