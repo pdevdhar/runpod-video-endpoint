@@ -4,6 +4,7 @@ from io import BytesIO
 from PIL import Image
 import imageio
 import uuid
+import numpy as np
 
 # -----------------------------
 # Model
@@ -57,60 +58,68 @@ def pad_image(img):
 
 
 # -----------------------------
-# Motion presets (NEW)
+# SIMPLE FRAME INTERPOLATION
+# (lightweight blending)
 # -----------------------------
 
-def get_motion_config(motion, quality):
+def interpolate_frames(frames, factor=2):
 
-    base = {
-        "static": 60,
-        "zoom_in": 85,
-        "zoom_out": 80,
-        "pan_left": 75,
-        "pan_right": 75,
-        "handheld": 110
-    }
+    if factor <= 1:
+        return frames
 
-    mb = base.get(motion, 75)
+    new_frames = []
 
-    # quality adjusts stability
-    # higher quality = more stable, less chaotic motion
-    if quality == "high":
-        mb -= 10
-    elif quality == "low":
-        mb += 15
+    for i in range(len(frames) - 1):
 
-    return max(40, min(120, mb))
+        f1 = np.array(frames[i])
+        f2 = np.array(frames[i + 1])
+
+        new_frames.append(frames[i])
+
+        # generate intermediate frames
+        for j in range(1, factor):
+            alpha = j / factor
+            blended = (1 - alpha) * f1 + alpha * f2
+            new_frames.append(Image.fromarray(blended.astype(np.uint8)))
+
+    new_frames.append(frames[-1])
+
+    return new_frames
 
 
 # -----------------------------
-# FAST / CINEMATIC SHARED CORE
+# FAST / CINEMATIC CORE
 # -----------------------------
 
-def generate_svd(image, duration, motion, quality):
+def generate(image, duration, quality):
 
     pipe = load_svd()
 
-    motion_bucket_id = get_motion_config(motion, quality)
+    # base frames (stable SVD range)
+    num_frames = min(max(int(14 + duration * 2.5), 14), 28)
 
-    # -------------------------
-    # frame strategy (NEW)
-    # -------------------------
-
-    # smooth scaling instead of fixed 14 frames
-    num_frames = min(max(int(12 + duration * 2.5), 14), 24)
-
-    # fps derived from duration
-    fps = max(4, min(8, round(num_frames / duration)))
+    motion_bucket_id = 75 if quality != "low" else 90
 
     result = pipe(
         image,
         num_frames=num_frames,
-        num_inference_steps=30 if quality == "high" else 25,
+        num_inference_steps=30,
         motion_bucket_id=motion_bucket_id
     )
 
-    return result.frames[0], fps, num_frames
+    frames = result.frames[0]
+
+    # -------------------------
+    # INTERPOLATION (NEW)
+    # -------------------------
+
+    # 2x interpolation for 5s+ videos
+    if duration >= 4.0:
+        frames = interpolate_frames(frames, factor=2)
+
+    fps = max(5, min(12, round(len(frames) / duration)))
+
+    return frames, fps
 
 
 # -----------------------------
@@ -122,10 +131,7 @@ def handler(job):
     inp = job.get("input", {})
 
     image_b64 = inp.get("image_base64")
-    mode = inp.get("mode", "fast")
     duration = float(inp.get("duration", 3.0))
-
-    motion = inp.get("motion", "static")
     quality = inp.get("quality", "medium")
 
     if not image_b64:
@@ -133,19 +139,10 @@ def handler(job):
 
     image = pad_image(decode_image(image_b64))
 
-    # -------------------------
-    # SINGLE ENGINE (stable)
-    # -------------------------
-
-    frames, fps, num_frames = generate_svd(
-        image,
-        duration,
-        motion,
-        quality
-    )
+    frames, fps = generate(image, duration, quality)
 
     # -------------------------
-    # Encode video
+    # encode video
     # -------------------------
 
     vid = str(uuid.uuid4())
@@ -158,13 +155,10 @@ def handler(job):
 
     return {
         "status": "success",
-        "mode": mode,
-        "motion": motion,
-        "quality": quality,
         "duration": duration,
         "fps": fps,
-        "frames": num_frames,
-        "motion_bucket_id_used": get_motion_config(motion, quality),
+        "frames": len(frames),
+        "interpolation": True,
         "video_base64": video_b64
     }
 
